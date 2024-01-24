@@ -13,15 +13,10 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mtick
 import seaborn as sns ; sns.set()
 import scipy.stats as stats
 import scipy.optimize as opt
-# from sklearn.preprocessing import StandardScaler
-# from sklearn.preprocessing import PolynomialFeatures
-# from sklearn.linear_model import LinearRegression
-# from sklearn.pipeline import Pipeline
-# import statsmodels.api as sm
-# import pickle
 from tqdm.notebook import tqdm
 
 
@@ -90,7 +85,6 @@ class Portfolio():
         # Risks for the Long Run : A Potential Resolution of Asset Pricing Puzzles.
         # The Journal of Finance, 59(4), 1481‑1509.
         # https://doi.org/10.1111/j.1540-6261.2004.00670.x
-
         self.init_utility(beta=.975, rho=1/1.5, gamma=2, eta=8.864)
         
         ### assets ###
@@ -132,7 +126,7 @@ class Portfolio():
         returns_init = np.zeros((self.n_simul, 1, self.n_assets))
         self.returns = np.hstack((returns_init, returns_random))
         
-    def display_paths(self, n_display):
+    def display_paths(self, n_display, legend=False):
         x = np.arange(self.horizon+1)
         mean = self.returns[:,1:,0].mean(axis=0)
         std = self.returns[:,1:,0].std(axis=0)
@@ -150,10 +144,12 @@ class Portfolio():
         #ax.fill_between(x, mean+q*std, mean-q*std,
         #                color='y', alpha=.2, label="95% CI")
         ax.set_xticks(x)
+        ax.yaxis.set_major_formatter(mtick.PercentFormatter(1))
         ax.set_xlabel("time")
         ax.set_ylabel("returns")
         ax.set_title("simulated cumulative log returns")
-        ax.legend(fontsize=8, ncol=2);
+        if legend:
+            ax.legend(fontsize=8, ncol=2);
 
     def display_paths_hist(self, time=0):
         """
@@ -370,6 +366,7 @@ class Portfolio():
     def init_constraints(self):
         """
         Portfolio weights constraints for optimization
+        lb <= A @ [theta1 theta2]' <= ub
         """
         A = np.array([[1,1],
                       [1,0],
