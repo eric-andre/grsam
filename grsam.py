@@ -40,7 +40,15 @@ class Portfolio():
         """
         self.horizon = horizon
         
-    def init_utility(self, beta, rho, gamma, eta):
+    def init_utility(self, beta=.975, rho=1/1.5, gamma=2, eta=8.864):
+        """
+        Inialize recursive utility parameters
+        Default values taken from
+            Bansal, R., & Yaron, A. (2004).
+            Risks for the Long Run : A Potential Resolution of Asset Pricing Puzzles.
+            The Journal of Finance, 59(4), 1481‑1509.
+            https://doi.org/10.1111/j.1540-6261.2004.00670.x
+        """
         self.beta = beta
         self.rho = rho
         self.gamma = gamma
@@ -68,43 +76,16 @@ class Portfolio():
     def init_results(self):
         """
         Pre allocation of arrays to store optimal controls and value functions
-        Note that there is no portfolio choice at t=horizon, hence the second dimension of theta
+        Note that there is no portfolio choice at t=horizon,
+         hence the second dimension of theta
         """
-        self.theta = np.zeros((self.n_simul, self.horizon, self.n_assets), dtype='float64')
-        self.ct = np.zeros((self.n_simul, self.horizon+1), dtype='float64')
-        self.G = np.zeros((self.n_simul, self.horizon+1), dtype='float64')
-        self.H = np.zeros((self.n_simul, self.horizon+1), dtype='float64')
+        shape = (self.n_simul, self.horizon, self.n_assets)
+        self.theta = np.zeros(shape, dtype='float64')
+        shape = (self.n_simul, self.horizon+1)
+        self.ct = np.zeros(shape, dtype='float64')
+        self.G = np.zeros(shape, dtype='float64')
+        self.H = np.zeros(shape, dtype='float64')
         self.reg_res = {}
-    
-    def standard_initialization(self):
-        """
-        Initialize the class with standard values to perform tests
-        """
-        ### utility ###
-        # parameters taken from Bansal, R., & Yaron, A. (2004).
-        # Risks for the Long Run : A Potential Resolution of Asset Pricing Puzzles.
-        # The Journal of Finance, 59(4), 1481‑1509.
-        # https://doi.org/10.1111/j.1540-6261.2004.00670.x
-        self.init_utility(beta=.975, rho=1/1.5, gamma=2, eta=8.864)
-        
-        ### assets ###
-        m = np.array([0.08, 0.08])
-        vol1 = 0.2
-        vol2 = 0.2
-        rho = 0.5
-        cov = rho * vol1 * vol2
-        sigma = np.array([[vol1**2, cov],
-                          [cov, vol2**2]])
-        self.init_assets(risk_free_rate=0.02, mean=m, covariance=sigma)
-        
-        ### prior ###
-        m_belief0 = m + np.array([0.05, 0.05])
-        factor1 = 1/10
-        factor2 = 1/4
-        sigma_belief0 = np.array([[factor1*vol1**2, 0],
-                                  [0, factor2*vol2**2]])
-        
-        self.init_belief(mean_belief=m_belief0, covariance_belief=sigma_belief0)
         
         
     ####################
@@ -345,7 +326,8 @@ class Portfolio():
         """
         Compute portfolio gross returns at all Gauss Hermite nodes
         `mean` is the mean of the belief distribution
-        Returns `Ret` a ndarray of size (n_Gauss x n_Gauss x n_Gauss x n_Gauss) for double quadrature.
+        Returns: `Ret` a ndarray of size (n_Gauss x n_Gauss x n_Gauss x n_Gauss)
+                 for double quadrature.
         """
         R1 = np.exp(mean[0] + self.R1_d) - self.rf
         R2 = np.exp(mean[1] + self.R2_d) - self.rf
@@ -688,28 +670,108 @@ class Portfolio():
     ### Static portfolio with two risky assets ###
     ##############################################
     
-    def CRRA_EU(self, theta):
+    def grid_CRRA_EU(self, n_grid_points, d_quad):
         """
-        With simple quadrature
-        """
-        R1 = np.exp(self.mean_belief_init[0] + self.R1_s) - self.rf
-        R2 = np.exp(self.mean_belief_init[1] + self.R2_s) - self.rf
-        ret = self.rf + theta[0] * R1 + theta[1] * R2
-        ret **= 1 - self.gamma
-        EU = self.outer_quadrature(ret)
-        return EU / (1-self.gamma)
+        Compute EU with CRRA utility
+        for a grid of points in the simplex
+        using either single or double quadrature
+        """    
+        if d_quad:
+            R1 = self.R1_d
+            R2 = self.R2_d
+        else:
+            R1 = self.R1_s
+            R2 = self.R2_s            
+        R1 = np.exp(self.mean_belief_init[0] + R1) - self.rf
+        R2 = np.exp(self.mean_belief_init[1] + R2) - self.rf
+        
+        def fun_simple(theta):
+            """
+            Certainty equivalents with CRRA EU of portfolio `theta`
+            computed with simple quadrature
+            returns opposite for use with scipy.optimize.minimize
+            """
+            ret = self.rf + theta[0] * R1 + theta[1] * R2
+            ret **= 1 - self.gamma
+            EU = self.outer_quadrature(ret)
+            CEquiv = EU ** (1/(1-self.gamma))
+            return -CEquiv
+            
+        def fun_double(theta):
+            """
+            Certainty equivalents with CRRA EU of portfolio `theta`
+            computed with double quadrature
+            returns opposite for use with scipy.optimize.minimize
+            """
+            ret = self.rf + theta[0] * R1 + theta[1] * R2
+            ret **= 1 - self.gamma
+            E = self.inner_quadrature(ret)
+            EU = self.outer_quadrature(E)
+            CEquiv = EU ** (1/(1-self.gamma))
+            return -CEquiv
 
-    def CRRA_EU_double_quad(self, theta):
-        """
-        With double quadrature
-        """
-        ret = self.gross_return(theta, self.mean_belief_init)
-        ret **= 1 - self.gamma
-        E = self.inner_quadrature(ret)
-        EU = self.outer_quadrature(E)
-        return EU / (1-self.gamma)
+        theta = np.linspace(0, 1, n_grid_points)
+        Theta1, Theta2 = np.meshgrid(theta, theta)
+        portfolios = np.vstack([Theta1.ravel(), Theta2.ravel()])
+        CE = np.zeros_like(Theta1).ravel()
+        
+        # store the certainty equivalents expressed in excess returns
+        for i, p in enumerate(portfolios.T):
+            if p.sum() <= 1.:
+                if d_quad:
+                    CE[i] = -fun_double(p) - self.rf
+                else:
+                    CE[i] = -fun_simple(p) - self.rf
+            else:
+                CE[i] = np.nan
+        CE = CE.reshape(Theta1.shape)
+        
+        if d_quad:
+            res = opt.minimize(fun_double, (0.25,0.25), constraints=self.cons)
+        else:
+            res = opt.minimize(fun_simple, (0.25,0.25), constraints=self.cons)
+        
+        return (Theta1, Theta2, CE), res.x
 
-    
+    def grid_KMM(self, n_grid_points):
+        """
+        Compute certainty equivalent with KMM utility
+        for a grid of points in the simplex
+        """
+        R1 = np.exp(self.mean_belief_init[0] + self.R1_d) - self.rf
+        R2 = np.exp(self.mean_belief_init[1] + self.R2_d) - self.rf
+                    
+        def KMM_CE(theta):
+            """
+            Certainty equivalents with KMM of portfolio `theta`
+            see the class function `tildeH()`
+            returns opposite for use with scipy.optimize.minimize
+            """
+            ret = self.rf + theta[0] * R1 + theta[1] * R2
+            ret **= 1 - self.gamma
+            E = self.inner_quadrature(ret)
+            E **= (1-self.eta) / (1-self.gamma)
+            KMM = self.outer_quadrature(E)
+            CEquiv = KMM ** (1/(1-self.eta))
+            return -CEquiv
+
+        theta = np.linspace(0, 1, n_grid_points)
+        Theta1, Theta2 = np.meshgrid(theta, theta)
+        portfolios = np.vstack([Theta1.ravel(), Theta2.ravel()])
+        CE = np.zeros_like(Theta1).ravel()
+        
+        # store the certainty equivalents expressed in excess returns
+        for i, p in enumerate(portfolios.T):
+            if p.sum() <= 1.:
+                CE[i] = -KMM_CE(p) - self.rf
+            else:
+                CE[i] = np.nan
+        CE = CE.reshape(Theta1.shape)
+        
+        res = opt.minimize(KMM_CE, (0.25,0.25), constraints=self.cons)
+        
+        return (Theta1, Theta2, CE), res.x
+
     def KMM_Hess(self, theta, mean_belief):
         """
         Return the Hessian of KMM utility of portfolio
